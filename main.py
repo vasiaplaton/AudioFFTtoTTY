@@ -3,33 +3,74 @@ import threading
 from tkinter import *
 
 
+class ConfigParser:
+    def __init__(self, path):
+        self.file = open(path, 'r')
+        
+
 class CavaListener:
-    def __init__(self, dynamic_max=False):
+    def __init__(self, config_path, cava_command):
         self._p = None
-        # TODO parse value from cava config vs hard coding
-        self.num_of_bars = 30
-        self.max_value = 1000
-        if dynamic_max:
-            threading.Timer(1, self.find_max).start()
+        self.sink_name = ""
+        self.cava_command = cava_command
+        self.config_path = config_path
+        self.num_of_bars = self._config_parse("bars")
+        self.max_value = self._config_parse("ascii_max_range")
+        self.start()
+        self._check_input()
 
     def start(self):
-        # TODO path to config and cava by argument vs hard coding
         # start cava with buffer for 1 line
-        self._p = Popen(['./cava/cava', '-p', 'config_raw'], stdin=PIPE, stdout=PIPE, stderr=STDOUT, bufsize=1,
+        self._p = Popen([self.cava_command, '-p', self.config_path], stdin=PIPE, stdout=PIPE, stderr=STDOUT, bufsize=1,
                         universal_newlines=True)
+
+    def kill(self):
+        self._p.kill()
 
     def process(self):
         for line in self._p.stdout:
             splited = line.split(";")
             # convert array of string to array of int
-            desired_array = [int(numeric_string) for numeric_string in splited[:len(splited)-1]]
+            desired_array = []
+            for numeric_string in splited[:len(splited)-1]:
+                int_value = int(numeric_string)
+                desired_array.append(int_value)
             return desired_array
 
-    def find_max(self):
-        pass
+    def _config_parse(self, name):
+        config = open(self.config_path, 'r')
+        # check all lines
+        for line in config:
+            # comments throw out
+            if line[0] != ";" and line[0] != "#" and line[0] != "[" and line[0] != "\n":
+                if line.find(name) != -1:
+                    # write to output array
+                    index = line.find("=")
+                    return int(line[index+1:])
+        raise ValueError("config " + name + "parameter in config file and restart app")
+
+    def _check_input(self):
+        list_proc = Popen(['pactl list short sinks'], stdin=PIPE, stdout=PIPE, stderr=STDOUT,
+                          universal_newlines=True, shell=TRUE)
+        (out, err) = list_proc.communicate()
+        out = out.split('\n')
+        sink_now = ''
+        for line in out:
+            if line.find("RUNNING") != -1:
+                sink_now = line.split()[1]
+        if sink_now != '':
+            if self.sink_name != '' and self.sink_name != sink_now:
+                print("restarting cava, sink changed")
+                self.kill()
+                self.start()
+            self.sink_name = sink_now
+        threading.Timer(1, self._check_input).start()
 
     def __del__(self):
-        self._p.kill()
+        try:
+            self.kill()
+        except AttributeError:
+            print("already killed")
 
 
 class Drawer:
@@ -77,8 +118,7 @@ class Drawer:
             print("already destroyed")
 
 
-cava = CavaListener()
-cava.start()
+cava = CavaListener(config_path='config_raw', cava_command='./cava/cava')
 drawer = Drawer(num_of_bars=cava.num_of_bars, max_value=cava.max_value)
 
 
