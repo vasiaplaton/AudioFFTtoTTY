@@ -3,20 +3,20 @@ import threading
 from tkinter import *
 
 
-class ConfigParser:
-    def __init__(self, path):
-        self.file = open(path, 'r')
-        
-
 class CavaListener:
-    def __init__(self, config_path, cava_command):
-        self._p = None
-        self.sink_name = ""
-        self.cava_command = cava_command
+    def __init__(self, config_path, cava_command, show_volume=False):
         self.config_path = config_path
+        self.cava_command = cava_command
+        self.show_volume = show_volume
+        self._p = None
+        self.cava_run = False
+        self.sink_name = ""
         self.num_of_bars = self._config_parse("bars")
         self.max_value = self._config_parse("ascii_max_range")
+        # start cava
         self.start()
+        self.cava_run = True
+        # input changed listener start
         self._check_input()
 
     def start(self):
@@ -28,13 +28,27 @@ class CavaListener:
         self._p.kill()
 
     def process(self):
+        if not self.cava_run:
+            return [0]*self.num_of_bars
         for line in self._p.stdout:
             splited = line.split(";")
             # convert array of string to array of int
             desired_array = []
+            count = 0
+            volume = 0
             for numeric_string in splited[:len(splited)-1]:
                 int_value = int(numeric_string)
                 desired_array.append(int_value)
+                if self.show_volume:
+                    if count < 10:
+                        volume += int_value*0.4
+                    elif 10 <= count < 20:
+                        volume += int_value
+                    elif count >= 10:
+                        volume += int_value * 0.8
+                    count += 1
+            if self.show_volume:
+                desired_array.append(volume/10)
             return desired_array
 
     def _config_parse(self, name):
@@ -60,9 +74,11 @@ class CavaListener:
                 sink_now = line.split()[1]
         if sink_now != '':
             if self.sink_name != '' and self.sink_name != sink_now:
-                print("restarting cava, sink changed")
+                # restart cava if sink changed
+                self.cava_run = False
                 self.kill()
                 self.start()
+                self.cava_run = True
             self.sink_name = sink_now
         threading.Timer(1, self._check_input).start()
 
@@ -74,7 +90,7 @@ class CavaListener:
 
 
 class Drawer:
-    def __init__(self, num_of_bars, max_value, width=800, height=600):
+    def __init__(self, num_of_bars, max_value, width=800, height=600, show_volume=False):
         # tkinter init
         # window make
         self.root = Tk()
@@ -87,12 +103,20 @@ class Drawer:
         self._c.focus_set()
         # array for bars
         self._bars = []
+        self.show_volume = show_volume
         # max value
         self.max_value = max_value
         w, h = self._get_c_geometry()
-        for i in range(0, num_of_bars):
-            x1, x2 = self._get_bars_x(i, num_of_bars)
-            self._bars.append(self._c.create_rectangle(x1, 0, x2, h, fill="White"))
+        if self.show_volume:
+            for i in range(0, num_of_bars):
+                x1, x2 = self._get_bars_x(i, num_of_bars+1)
+                self._bars.append(self._c.create_rectangle(x1, 0, x2, h, fill="White"))
+            x1, x2 = self._get_bars_x(num_of_bars, num_of_bars + 1)
+            self._bars.append(self._c.create_rectangle(x1, 0, x2, h, fill="Red"))
+        else:
+            for i in range(0, num_of_bars):
+                x1, x2 = self._get_bars_x(i, num_of_bars)
+                self._bars.append(self._c.create_rectangle(x1, 0, x2, h, fill="White"))
 
     def set_values(self, values):
         w, h = self._get_c_geometry()
@@ -118,8 +142,8 @@ class Drawer:
             print("already destroyed")
 
 
-cava = CavaListener(config_path='config_raw', cava_command='./cava/cava')
-drawer = Drawer(num_of_bars=cava.num_of_bars, max_value=cava.max_value)
+cava = CavaListener(config_path='config_raw', cava_command='./cava/cava', show_volume=True)
+drawer = Drawer(num_of_bars=cava.num_of_bars, max_value=cava.max_value, show_volume=True)
 
 
 def main():
