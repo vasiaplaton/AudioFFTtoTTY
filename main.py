@@ -10,8 +10,15 @@ class CavaListener:
         self.cava_command = cava_command
         self._p = None
         self.sink_name = ""
+
         self.num_of_bars = self._config_parse("bars")
+        if self.num_of_bars is None:
+            raise ValueError("config number of bars parameter in config file and restart app")
+
         self.max_value = self._config_parse("ascii_max_range")
+        if self.max_value is None:
+            raise ValueError("config ascii_max_range parameter in config file and restart app")
+
         # start cava
         self.start_cava()
         # input changed listener start
@@ -61,28 +68,31 @@ class CavaListener:
         # check all lines
         for line in config:
             # comments throw out
-            if line[0] != ";" and line[0] != "#" and line[0] != "[" and line[0] != "\n":
-                if line.find(name) != -1:
-                    # write to output array
-                    index = line.find("=")
-                    return int(line[index + 1:])
-        raise ValueError("config " + name + "parameter in config file and restart app")
+            if line[0] == ";" or line[0] == "#" or line[0] == "[" or line[0] == "\n":
+                continue
+            if name in line:
+                # write to output array
+                index = line.find("=")
+                return int(line[index + 1:])
+        return
 
     def _auto_change_audio_input(self):
         list_proc = Popen(['pactl list short sinks'], stdin=PIPE, stdout=PIPE, stderr=STDOUT,
                           universal_newlines=True, shell=TRUE)
-        (out, err) = list_proc.communicate()
+        out, err = list_proc.communicate()
         out = out.split('\n')
         sink_now = ''
         for line in out:
-            if line.find("RUNNING") != -1:
+            if "RUNNING" in line:
                 sink_now = line.split()[1]
+                break
         if sink_now != '':
-            if self.sink_name != '' and self.sink_name != sink_now:
+            if self.sink_name != sink_now:
                 # restart cava if sink changed
                 self.kill_cava()
                 self.start_cava()
             self.sink_name = sink_now
+        # start new thread
         self.thread_auto_change = threading.Timer(1, self._auto_change_audio_input)
         self.thread_auto_change.start()
 
@@ -113,6 +123,7 @@ class Drawer:
         self._bars = []
         # max value
         self.max_value = max_value
+        # bars prepare
         # BUG: canvas geometry on start always 1 1, cant calculate correct cords
         for _ in range(num_of_bars):
             self._bars.append(self._c.create_rectangle(0, 0, 0, 0, fill="White"))
@@ -121,6 +132,12 @@ class Drawer:
             self._volume_bar = self._c.create_rectangle(0, 0, 0, 0, fill="Red")
 
     def set_values(self, values, volume=None):
+        """
+        Method that get values and volume and draw proportional bars in display
+        :param values: equalizer values
+        :param volume: calculated volume(optional)
+        :return: Nothing
+        """
         w, h = self._get_c_geometry()
         num_of_eg_bars = len(self._bars)
         for i in range(num_of_eg_bars):
