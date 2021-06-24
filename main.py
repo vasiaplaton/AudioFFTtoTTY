@@ -49,19 +49,19 @@ class CavaListener:
             return desired_array, self._calculate_volume(desired_array)
         return
 
-    @staticmethod
-    def _calculate_volume(eq_array):
+    def _calculate_volume(self, eq_array):
         # TODO better method to calculate volume
         volume = 0
         for i in range(len(eq_array)):
             eq_now = eq_array[i]
-            if i < 10:
+            if i < self.num_of_bars // 3:
                 volume += eq_now * 0.04
-            elif 10 <= i < 20:
+            elif self.num_of_bars // 3 <= i < self.num_of_bars // 3 * 2:
                 volume += eq_now * 0.1
-            elif i >= 10:
+            else:
                 volume += eq_now * 0.08
         return volume
+        # return sum(eq_array) // self.num_of_bars * 2
 
     def _config_parse(self, name):
         config = open(self.config_path, 'r')
@@ -87,7 +87,7 @@ class CavaListener:
                 sink_now = line.split()[1]
                 break
         if sink_now != '':
-            if self.sink_name != sink_now:
+            if self.sink_name != "" and self.sink_name != sink_now:
                 # restart cava if sink changed
                 self.kill_cava()
                 self.start_cava()
