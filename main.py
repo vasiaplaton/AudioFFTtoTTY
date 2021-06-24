@@ -5,10 +5,9 @@ import signal
 
 
 class CavaListener:
-    def __init__(self, config_path, cava_command, show_volume=False):
+    def __init__(self, config_path, cava_command):
         self.config_path = config_path
         self.cava_command = cava_command
-        self.show_volume = show_volume
         self._p = None
         self.sink_name = ""
         self.num_of_bars = self._config_parse("bars")
@@ -16,8 +15,8 @@ class CavaListener:
         # start cava
         self.start_cava()
         # input changed listener start
-        self.thread = threading.Timer(1, self._check_input)
-        self.thread.start()
+        self.thread_auto_change = threading.Timer(1, self._auto_change_audio_input)
+        self.thread_auto_change.start()
 
     def start_cava(self):
         # start cava with buffer for 1 line
@@ -37,23 +36,25 @@ class CavaListener:
             splited = line.split(";")
             desired_array = []
             # convert array of string to array of int
-            count = 0
-            volume = 0
             for numeric_string in splited[:len(splited) - 1]:
                 int_value = int(numeric_string)
                 desired_array.append(int_value)
-                if self.show_volume:
-                    if count < 10:
-                        volume += int_value * 0.4
-                    elif 10 <= count < 20:
-                        volume += int_value
-                    elif count >= 10:
-                        volume += int_value * 0.8
-                    count += 1
-            if self.show_volume:
-                desired_array.append(volume / 10)
-            return desired_array
+            return desired_array, self._calculate_volume(desired_array)
         return
+
+    @staticmethod
+    def _calculate_volume(eq_array):
+        # TODO better method to calculate volume
+        volume = 0
+        for i in range(len(eq_array)):
+            eq_now = eq_array[i]
+            if i < 10:
+                volume += eq_now * 0.04
+            elif 10 <= i < 20:
+                volume += eq_now * 0.1
+            elif i >= 10:
+                volume += eq_now * 0.08
+        return volume
 
     def _config_parse(self, name):
         config = open(self.config_path, 'r')
@@ -67,7 +68,7 @@ class CavaListener:
                     return int(line[index + 1:])
         raise ValueError("config " + name + "parameter in config file and restart app")
 
-    def _check_input(self):
+    def _auto_change_audio_input(self):
         list_proc = Popen(['pactl list short sinks'], stdin=PIPE, stdout=PIPE, stderr=STDOUT,
                           universal_newlines=True, shell=TRUE)
         (out, err) = list_proc.communicate()
@@ -82,14 +83,14 @@ class CavaListener:
                 self.kill_cava()
                 self.start_cava()
             self.sink_name = sink_now
-        self.thread = threading.Timer(1, self._check_input)
-        self.thread.start()
+        self.thread_auto_change = threading.Timer(1, self._auto_change_audio_input)
+        self.thread_auto_change.start()
 
     def __del__(self):
         print("cava class destroyed")
         self.kill_cava()
         try:
-            self.thread.cancel()
+            self.thread_auto_change.cancel()
         except AttributeError:
             print("thread already killed")
 
@@ -101,7 +102,7 @@ class Drawer:
         self.root = Tk()
         # Name window
         self.root.title("Cava vis")
-        # make Canvas, background green
+        # make Canvas, background black
         self._c = Canvas(self.root, width=width, height=height, bg="Black")
         self._c.grid()
         # focus on canvas to keypress get
@@ -110,30 +111,31 @@ class Drawer:
         self._prepare_for_close(execute_on_close)
         # array for bars
         self._bars = []
-        self.show_volume = show_volume
         # max value
         self.max_value = max_value
-        w, h = self._get_c_geometry()
-        if self.show_volume:
-            for i in range(0, num_of_bars):
-                x1, x2 = self._get_bars_x(i, num_of_bars + 1)
-                self._bars.append(self._c.create_rectangle(x1, 0, x2, h, fill="White"))
-            x1, x2 = self._get_bars_x(num_of_bars, num_of_bars + 1)
-            self._bars.append(self._c.create_rectangle(x1, 0, x2, h, fill="Red"))
-        else:
-            for i in range(0, num_of_bars):
-                x1, x2 = self._get_bars_x(i, num_of_bars)
-                self._bars.append(self._c.create_rectangle(x1, 0, x2, h, fill="White"))
+        # BUG: canvas geometry on start always 1 1, cant calculate correct cords
+        for _ in range(num_of_bars):
+            self._bars.append(self._c.create_rectangle(0, 0, 0, 0, fill="White"))
+        self._volume_bar = None
+        if show_volume:
+            self._volume_bar = self._c.create_rectangle(0, 0, 0, 0, fill="Red")
 
-    def set_values(self, values):
+    def set_values(self, values, volume=None):
         w, h = self._get_c_geometry()
-        for i in range(len(self._bars)):
-            x1, x2 = self._get_bars_x(i, len(self._bars))
+        num_of_eg_bars = len(self._bars)
+        for i in range(num_of_eg_bars):
+            x1, x2 = self._get_bars_x(i, num_of_eg_bars)
             self._c.coords(self._bars[i], x1, h - self._map_value(values[i], 0, self.max_value, 0, h), x2, h)
+
+        if self._volume_bar is not None:
+            x1, x2 = self._get_bars_x(num_of_eg_bars, num_of_eg_bars)
+            self._c.coords(self._volume_bar, x1, h - self._map_value(volume, 0, self.max_value, 0, h), x2, h)
 
     def _get_bars_x(self, i, num_of_bars):
         w, h = self._get_c_geometry()
-        return int((w / (num_of_bars * 2 + 1)) * (i * 2 + 1)), int((w / (num_of_bars * 2 + 1)) * (i * 2 + 2))
+        if self._volume_bar is not None:
+            num_of_bars += 1
+        return int((w / (num_of_bars * 2 + 1)) * (i * 2 + 1)), int((w/(num_of_bars*2+1))*(i*2+2))
 
     def _get_c_geometry(self):
         return self._c.winfo_width(), self._c.winfo_height()
@@ -166,14 +168,15 @@ class Drawer:
             print("already destroyed")
 
 
-cava = CavaListener(config_path='config_raw', cava_command='./cava/cava', show_volume=True)
+cava = CavaListener(config_path='config_raw', cava_command='./cava/cava')
 drawer = Drawer(num_of_bars=cava.num_of_bars, max_value=cava.max_value, show_volume=True, execute_on_close=cava.__del__)
 
 
 def main():
-    values = cava.process()
-    if values is not None:
-        drawer.set_values(values)
+    cava_result = cava.process()
+    if cava_result is not None:
+        values, volume = cava_result
+        drawer.set_values(values, volume)
     drawer.root.after(10, main)
 
 
