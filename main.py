@@ -2,6 +2,8 @@ from subprocess import Popen, PIPE, STDOUT
 import threading
 from tkinter import *
 import signal
+import serial
+import serial.tools.list_ports
 
 
 class CavaListener:
@@ -22,13 +24,24 @@ class CavaListener:
         # start cava
         self.start_cava()
         # input changed listener start
-        self.thread_auto_change = threading.Timer(1, self._auto_change_audio_input)
-        self.thread_auto_change.start()
+        self._auto_change_audio_input()
+
+        # volume autosens
+        self.min_volume = -1
+        self.max_volume = -1
+        self._autosens_volume()
 
     def start_cava(self):
         # start cava with buffer for 1 line
         self._p = Popen([self.cava_command, '-p', self.config_path], stdin=PIPE, stdout=PIPE, stderr=STDOUT, bufsize=1,
                         universal_newlines=True)
+
+    def _autosens_volume(self):
+        self.min_volume = -1
+        self.max_volume = -1
+        print("volume min max recalculated")
+        self.thread_autosens_volume = threading.Timer(10, self._autosens_volume)
+        self.thread_autosens_volume.start()
 
     def kill_cava(self):
         try:
@@ -51,16 +64,25 @@ class CavaListener:
 
     def _calculate_volume(self, eq_array):
         # TODO better method to calculate volume
-        volume = 0
-        for i in range(len(eq_array)):
-            eq_now = eq_array[i]
-            if i < self.num_of_bars // 3:
-                volume += eq_now * 0.04
-            elif self.num_of_bars // 3 <= i < self.num_of_bars // 3 * 2:
-                volume += eq_now * 0.1
-            else:
-                volume += eq_now * 0.08
-        return volume
+        # volume = 0
+        # for i in range(len(eq_array)):
+        #     eq_now = eq_array[i]
+        #     if i < self.num_of_bars // 3:
+        #         volume += eq_now * 0.04
+        #     elif self.num_of_bars // 3 <= i < self.num_of_bars // 3 * 2:
+        #         volume += eq_now * 0.1
+        #     else:
+        #         volume += eq_now * 0.08
+
+        volume = sum(eq_array)
+
+        if volume < self.min_volume or self.min_volume == -1:
+            self.min_volume = volume
+        if volume > self.max_volume or self.max_volume == -1:
+            self.max_volume = volume
+        if (self.max_volume - self.min_volume) == 0:
+            return int(volume)
+        return int((volume - self.min_volume) * self.max_value // (self.max_volume - self.min_volume))
         # return sum(eq_array) // self.num_of_bars * 2
 
     def _config_parse(self, name):
@@ -91,6 +113,10 @@ class CavaListener:
                 # restart cava if sink changed
                 self.kill_cava()
                 self.start_cava()
+                # recalculate volume
+                self.min_volume = -1
+                self.max_volume = -1
+
             self.sink_name = sink_now
         # start new thread
         self.thread_auto_change = threading.Timer(1, self._auto_change_audio_input)
@@ -103,10 +129,16 @@ class CavaListener:
             self.thread_auto_change.cancel()
         except AttributeError:
             print("thread already killed")
+        try:
+            self.thread_autosens_volume.cancel()
+        except AttributeError:
+            print("thread already killed")
 
 
 class Drawer:
     def __init__(self, num_of_bars, max_value, width=800, height=600, show_volume=False, execute_on_close=None):
+        self.width = width
+        self.height = height
         # tkinter init
         # window make
         self.root = Tk()
@@ -130,6 +162,43 @@ class Drawer:
         self._volume_bar = None
         if show_volume:
             self._volume_bar = self._c.create_rectangle(0, 0, 0, 0, fill="Red")
+        # buttons
+        self.button_connect = None
+
+    def control_prepare(self, connect=None, effect_change=None):
+        self.root.configure(background="#3b3b3b")
+        f1 = Frame(self.root, background="#3b3b3b", height=self.height)
+        f1.grid(row=0, column=1, sticky="ewns")
+        self.button_connect = Button(f1, text="Disconnect", bg="#9aff36", fg="black",
+                                     command=lambda: connect(self.change_status_connect), bd=0,
+                                     activebackground="#c7ff8f", relief="flat")
+        self.button_connect.pack(side="top", pady=2)
+        Button(f1, text="Effect0", bg="#ffdd61", fg="black", command=lambda: effect_change(0), bd=0,
+               activebackground="#ffe894",
+               relief="flat").pack(side="top", pady=2)
+        Button(f1, text="Effect1", bg="#ffdd61", fg="black", command=lambda: effect_change(1), bd=0,
+               activebackground="#ffe894",
+               relief="flat").pack(side="top", pady=2)
+        # Button(f1, text="Disconnect", bg="#ff3d3d", fg="black", command=disconnect, bd=0, activebackground="#ff7a7a",
+        #      relief="flat").pack(side="bottom", pady=2)
+        # button1 = Button(f1, text="QUIT", bg="#ff3d3d", fg="black", command=quit, bd=0, activebackground="#ff7a7a",
+        #                  relief="flat").pack(side="top", pady=2)
+
+    def change_status_connect(self, connected):
+        print("on change status", connected)
+        if self.button_connect is None:
+            print("self.button_connect is None")
+            return
+        if connected:
+            self.button_connect.configure(text="Disconnect", bg="#9aff36", fg="black", activebackground="#c7ff8f")
+        else:
+            self.button_connect.configure(text="Connect", bg="#ff3d3d", fg="black", activebackground="#ff7a7a")
+
+    def change_effect_num(self, status):
+        pass
+
+    def change_sleep_mode(self, sleep):
+        pass
 
     def set_values(self, values, volume=None):
         """
@@ -152,7 +221,7 @@ class Drawer:
         w, h = self._get_c_geometry()
         if self._volume_bar is not None:
             num_of_bars += 1
-        return int((w / (num_of_bars * 2 + 1)) * (i * 2 + 1)), int((w/(num_of_bars*2+1))*(i*2+2))
+        return int((w / (num_of_bars * 2 + 1)) * (i * 2 + 1)), int((w / (num_of_bars * 2 + 1)) * (i * 2 + 2))
 
     def _get_c_geometry(self):
         return self._c.winfo_width(), self._c.winfo_height()
@@ -164,6 +233,7 @@ class Drawer:
     def _prepare_for_close(self, execute_on_close):
         # on window close
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
+
         # sigkill close
 
         def sigkill_handler(_sig, _frame):
@@ -185,8 +255,74 @@ class Drawer:
             print("already destroyed")
 
 
+class OutputLed:
+    def __init__(self, vid, pid, speed, max_value):
+        port_addr = None
+        self.connected = True
+        self.max_value = max_value
+        self.effect = 1
+        ports = serial.tools.list_ports.comports()
+        for port in ports:
+            if hex(port.vid)[2:] == vid and hex(port.pid)[2:] == pid:
+                print(port.device)
+                port_addr = port.device
+                break
+        if port_addr is None:
+            print("connect led device")
+        try:
+            self.port = serial.Serial(port_addr, speed)
+        except Exception as e:
+            print(e)
+
+    def set_values(self, values, volume):
+        if self.effect == 0:
+            for i in range(len(values)):
+                values[i] = self.constrain_value(values[i])
+            self.write_in_port(bytearray(values + [10]))
+            # print(bytearray(values + [10]))
+        if self.effect == 1:
+            self.write_in_port(bytearray([self.constrain_value(volume)]))
+            # print(self.constrain_value(volume))
+
+    def set_effect(self, num_of_effect):
+        if self.write_in_port(bytearray([11] + [num_of_effect])):
+            self.effect = num_of_effect
+
+    def constrain_value(self, val):
+        # 10 and 11 reserved bytes
+        val = val * 255 // self.max_value
+        if val > 255:
+            val = 255
+        if val == 10:
+            val = 12
+        if val == 11:
+            val = 12
+        return val
+
+    def write_in_port(self, bytes_array):
+        if self.port.is_open:
+            try:
+                self.port.write(bytes_array)
+                return True
+            except Exception as e:
+                print(e)
+        return False
+
+    def connect(self, change_status_func):
+        if self.port.is_open:
+            self.port.close()
+        else:
+            self.port.open()
+        change_status_func(self.port.is_open)
+
+    def __del__(self):
+        self.port.close()
+
+
 cava = CavaListener(config_path='config_raw', cava_command='./cava/cava')
 drawer = Drawer(num_of_bars=cava.num_of_bars, max_value=cava.max_value, show_volume=True, execute_on_close=cava.__del__)
+leds = OutputLed(vid="1a86", pid="7523", speed=500000, max_value=cava.max_value)
+drawer.control_prepare(connect=leds.connect, effect_change=leds.set_effect)
 
 
 def main():
@@ -194,6 +330,8 @@ def main():
     if cava_result is not None:
         values, volume = cava_result
         drawer.set_values(values, volume)
+        leds.set_values(values, volume)
+        # leds.set_volume(volume // 4)
     drawer.root.after(10, main)
 
 
